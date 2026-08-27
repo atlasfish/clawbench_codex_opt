@@ -50,13 +50,14 @@ vi.mock('@/composables/useSessionIdentity', () => ({
 }))
 
 const mockStoreState = vi.hoisted(() => ({ projectRoot: '/project' }))
+const mockAgentBackend = vi.hoisted(() => ({ value: 'claude' }))
 vi.mock('@/stores/app.ts', () => ({
   store: { state: mockStoreState },
 }))
 
 vi.mock('@/composables/useAgents', () => ({
   useAgents: () => ({
-    getAgentBackend: () => 'claude',
+    getAgentBackend: () => mockAgentBackend.value,
   }),
 }))
 
@@ -124,6 +125,7 @@ describe('AcpSessionDrawer', () => {
     mockNextCursor.value = null
     mockResuming.value = false
     mockStoreState.projectRoot = '/project'
+    mockAgentBackend.value = 'claude'
   })
 
   describe('handleSelect', () => {
@@ -264,6 +266,20 @@ describe('AcpSessionDrawer', () => {
       await nextTick()
       expect(wrapper.text()).toContain('chat.acpSession.hiddenInOtherProjects')
       expect((wrapper.vm as { hiddenOtherProjectCount: number }).hiddenOtherProjectCount).toBe(2)
+    })
+
+    it('hides untitled Codex sessions without affecting other backends', async () => {
+      mockAgentBackend.value = 'codex'
+      mockSessions.value = [
+        inProject('s1', 'Main Session', '/project'),
+        inProject('s2', '', '/project'),
+        inProject('s3', '   ', '/project'),
+      ]
+
+      const wrapper = mountDrawer()
+      await nextTick()
+      expect(wrapper.text()).toContain('Main Session')
+      expect(wrapper.findAll('.acp-session-item')).toHaveLength(1)
     })
 
     it('matches the current project ignoring a trailing slash on cwd', async () => {

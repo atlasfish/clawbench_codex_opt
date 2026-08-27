@@ -115,14 +115,19 @@ function normalizeProjectPath(p: string): string {
   return result.replace(/\/+$/, '')
 }
 
+const displayableSessions = computed(() => {
+  if (backendId.value !== 'codex') return acpSessions.value
+  return acpSessions.value.filter((session) => session.title.trim() !== '')
+})
+
 const sessionsInCurrentProject = computed(() => {
   const root = normalizeProjectPath(store.state.projectRoot || '')
   if (!root) return []
-  return acpSessions.value.filter((s) => normalizeProjectPath(s.cwd || '') === root)
+  return displayableSessions.value.filter((s) => normalizeProjectPath(s.cwd || '') === root)
 })
 
 const hiddenOtherProjectCount = computed(
-  () => acpSessions.value.length - sessionsInCurrentProject.value.length
+  () => displayableSessions.value.length - sessionsInCurrentProject.value.length
 )
 
 const filteredSessions = computed(() => {

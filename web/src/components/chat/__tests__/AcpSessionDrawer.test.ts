@@ -274,6 +274,28 @@ describe('AcpSessionDrawer', () => {
       await nextTick()
       expect(wrapper.text()).toContain('Project Session')
     })
+
+    it('matches Windows paths ignoring drive case, slash style, dot segments, and spaces', async () => {
+      mockStoreState.projectRoot = String.raw`C:\Work\Repo With Spaces`
+      mockSessions.value = [
+        inProject('s1', 'Windows Project Session', 'c:/work/repo with spaces/./'),
+        inProject('s2', 'Other Windows Project', 'C:/Work/Other'),
+      ]
+
+      const wrapper = mountDrawer()
+      await nextTick()
+      expect(wrapper.text()).toContain('Windows Project Session')
+      expect(wrapper.text()).not.toContain('Other Windows Project')
+    })
+
+    it('matches UNC paths case-insensitively', async () => {
+      mockStoreState.projectRoot = String.raw`\\Server\Share\Repo`
+      mockSessions.value = [inProject('s1', 'UNC Project Session', '//server/share/repo/')]
+
+      const wrapper = mountDrawer()
+      await nextTick()
+      expect(wrapper.text()).toContain('UNC Project Session')
+    })
   })
 
   describe('loading indicator', () => {

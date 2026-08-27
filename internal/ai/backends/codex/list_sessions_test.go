@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"clawbench/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +52,8 @@ func TestScanCodexSessionsSkipsMalformedAndMissingFields(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-missing.jsonl"),
 		[]byte(`{"type":"session_meta","payload":{"id":"id-without-cwd"}}`+"\n"), 0o644))
 
-	sessions, stats := scanCodexSessions(filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(root)))), "C:/Work/Repo", 100, 100)
+	sessionsRoot := filepath.Dir(filepath.Dir(filepath.Dir(root)))
+	sessions, stats := scanCodexSessions(sessionsRoot, "C:/Work/Repo", 100, 100)
 
 	assert.Empty(t, sessions)
 	assert.Equal(t, 2, stats.skipped)
@@ -72,7 +74,7 @@ func TestCodexProjectPathsEqualPreservesPOSIXCaseSensitivity(t *testing.T) {
 func TestScanCodexSessionsHonorsLimits(t *testing.T) {
 	codexHome := t.TempDir()
 	project := t.TempDir()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		writeCodexRollout(t, codexHome, "2026/08/27",
 			fmt.Sprintf("00000000-0000-4000-8000-00000000000%d", i), project,
 			time.Date(2026, 8, 27, 10, i, 0, 0, time.UTC))
@@ -88,7 +90,7 @@ func TestScanCodexSessionsAppliesResultLimitAfterUpdatedSort(t *testing.T) {
 	codexHome := t.TempDir()
 	project := t.TempDir()
 	base := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		file := writeCodexRollout(t, codexHome, fmt.Sprintf("2026/08/%02d", 25+i),
 			fmt.Sprintf("00000000-0000-4000-8000-00000000001%d", i), project, base.Add(time.Duration(i)*time.Hour))
 		if i == 0 {
@@ -117,4 +119,116 @@ func TestParseCodexSessionHeaderUsesMetadataID(t *testing.T) {
 	assert.Equal(t, "00000000-0000-4000-8000-000000000009", session.SessionID)
 	assert.Equal(t, project, session.Cwd)
 	assert.Equal(t, time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC), session.CreatedAt)
+}
+
+func TestListCodexSessionsFromDiskUsesCodexHomeAndReturnsACPInfo(t *testing.T) {
+	codexHome := t.TempDir()
+	project := t.TempDir()
+	updatedAt := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	writeCodexRollout(t, codexHome, "2026/08/27",
+		"00000000-0000-4000-8000-000000000021", project, updatedAt)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	sessions, err := listCodexSessionsFromDisk(&model.Agent{Backend: "codex"}, project)
+
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "00000000-0000-4000-8000-000000000021", string(sessions[0].SessionId))
+	assert.Equal(t, project, sessions[0].Cwd)
+	require.NotNil(t, sessions[0].UpdatedAt)
+	assert.Equal(t, updatedAt.Format(time.RFC3339), *sessions[0].UpdatedAt)
+}
+
+func TestListCodexSessionsFromDiskSkipsEmptyProject(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+
+	sessions, err := listCodexSessionsFromDisk(&model.Agent{Backend: "codex"}, " ")
+
+	require.NoError(t, err)
+	assert.Empty(t, sessions)
+}
+
+func TestResolveCodexHomeUsesEnvironment(t *testing.T) {
+	expected := filepath.Join(t.TempDir(), "custom", "..", "codex")
+	t.Setenv("CODEX_HOME", expected)
+
+	actual, err := resolveCodexHome()
+
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Clean(expected), actual)
+}
+
+func TestScanCodexSessionsMissingRootAndDisabledLimits(t *testing.T) {
+	sessions, stats := scanCodexSessions(filepath.Join(t.TempDir(), "missing"), t.TempDir(), 100, 100)
+	assert.Empty(t, sessions)
+	assert.Zero(t, stats.scanned)
+
+	sessions, stats = scanCodexSessions(t.TempDir(), t.TempDir(), 0, 100)
+	assert.Empty(t, sessions)
+	assert.Zero(t, stats.scanned)
+}
+
+func TestScanCodexSessionsMarksScanLimitReached(t *testing.T) {
+	codexHome := t.TempDir()
+	project := t.TempDir()
+	for i := range 3 {
+		writeCodexRollout(t, codexHome, "2026/08/27",
+			fmt.Sprintf("00000000-0000-4000-8000-00000000003%d", i), project, time.Now())
+	}
+
+	sessions, stats := scanCodexSessions(filepath.Join(codexHome, "sessions"), project, 1, 10)
+
+	require.Len(t, sessions, 1)
+	assert.True(t, stats.limitReached)
+	assert.Equal(t, 1, stats.scanned)
+}
+
+func TestParseCodexSessionHeaderFallbacksAndErrors(t *testing.T) {
+	dir := t.TempDir()
+	modified := time.Date(2026, 8, 27, 13, 0, 0, 0, time.UTC)
+
+	sessionIDFallback := filepath.Join(dir, "session-id-fallback.jsonl")
+	require.NoError(t, os.WriteFile(sessionIDFallback, []byte(
+		"\n"+`{"timestamp":"2026-08-27T10-00-00","type":"session_meta","payload":{"session_id":"fallback-id","cwd":"/project"}}`+"\n",
+	), 0o644))
+	require.NoError(t, os.Chtimes(sessionIDFallback, modified, modified))
+	info, err := os.Stat(sessionIDFallback)
+	require.NoError(t, err)
+	session, err := parseCodexSessionHeader(sessionIDFallback, info)
+	require.NoError(t, err)
+	assert.Equal(t, "fallback-id", session.SessionID)
+	assert.Equal(t, time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC), session.CreatedAt)
+
+	wrongType := filepath.Join(dir, "wrong-type.jsonl")
+	require.NoError(t, os.WriteFile(wrongType, []byte(`{"type":"response_item","payload":{}}`+"\n"), 0o644))
+	info, err = os.Stat(wrongType)
+	require.NoError(t, err)
+	_, err = parseCodexSessionHeader(wrongType, info)
+	assert.ErrorContains(t, err, "first record type")
+
+	badPayload := filepath.Join(dir, "bad-payload.jsonl")
+	require.NoError(t, os.WriteFile(badPayload, []byte(`{"type":"session_meta","payload":"invalid"}`+"\n"), 0o644))
+	info, err = os.Stat(badPayload)
+	require.NoError(t, err)
+	_, err = parseCodexSessionHeader(badPayload, info)
+	assert.ErrorContains(t, err, "decode session metadata")
+
+	empty := filepath.Join(dir, "empty.jsonl")
+	require.NoError(t, os.WriteFile(empty, nil, 0o644))
+	info, err = os.Stat(empty)
+	require.NoError(t, err)
+	_, err = parseCodexSessionHeader(empty, info)
+	assert.ErrorContains(t, err, "session metadata not found")
+}
+
+func TestParseAndFormatCodexSessionTime(t *testing.T) {
+	assert.True(t, parseCodexSessionTime("").IsZero())
+	assert.True(t, parseCodexSessionTime("invalid").IsZero())
+	assert.Nil(t, formatCodexSessionTime(time.Time{}))
+
+	parsed := parseCodexSessionTime("2026-08-27T10:00:00.123456Z")
+	assert.Equal(t, 123456000, parsed.Nanosecond())
+	formatted := formatCodexSessionTime(parsed)
+	require.NotNil(t, formatted)
+	assert.Equal(t, "2026-08-27T10:00:00Z", *formatted)
 }

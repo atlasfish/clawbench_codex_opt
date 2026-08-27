@@ -186,7 +186,7 @@ func parseCodexSessionHeader(filePath string, info os.FileInfo) (codexDiskSessio
 	reader := bufio.NewReader(io.LimitReader(f, codexSessionHeaderLimit))
 	for {
 		line, readErr := reader.ReadBytes('\n')
-		if len(strings.TrimSpace(string(line))) > 0 {
+		if strings.TrimSpace(string(line)) != "" {
 			var rollout codexRolloutLine
 			if err := json.Unmarshal(line, &rollout); err != nil {
 				return codexDiskSession{}, fmt.Errorf("decode rollout header: %w", err)

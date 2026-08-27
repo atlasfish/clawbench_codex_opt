@@ -67,7 +67,12 @@ export function useAcpSession(options: UseAcpSessionOptions) {
         updatedAt: s.updatedAt || s.updated_at || '',
       }))
       if (append) {
-        acpSessions.value.push(...sessions)
+        const existingIds = new Set(acpSessions.value.map((session) => session.sessionId))
+        acpSessions.value.push(...sessions.filter((session) => {
+          if (existingIds.has(session.sessionId)) return false
+          existingIds.add(session.sessionId)
+          return true
+        }))
       } else {
         acpSessions.value = sessions
       }
